@@ -356,10 +356,10 @@ def main(N = 4, epochs = 10000, seed = 42, rname = False, saveat = 100, dt = 1.0
     optimizer_step = -1
     larray = []
     ltarray = []
-
+    last_loss = 1000
     start = time.time()
     train_time_arr = []
-
+    
     for epoch in range(epochs):
         l = 0.0
         for data in zip(bRs, bVs, bZs_dot):
@@ -391,6 +391,12 @@ def main(N = 4, epochs = 10000, seed = 42, rname = False, saveat = 100, dt = 1.0
                     params, metadata=metadata)
             savefile(f"loss_array_{ifdrag}_{trainm}.dil",
                     (larray, ltarray), metadata=metadata)
+            
+            if last_loss > larray[-1]:
+                last_loss = larray[-1]
+                savefile(f"trained_model_{ifdrag}_{trainm}_low.dil",
+                            params, metadata=metadata)
+            
 
         now = time.time()
         train_time_arr.append((now - start))

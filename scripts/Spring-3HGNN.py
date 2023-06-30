@@ -108,7 +108,7 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True, saveat = 10, error_fn="
     key = random.PRNGKey(seed)
     
     try:
-        dataset_states = loadfile(f"model_states_{ifdrag}.pkl", tag="data-ham")[0]
+        dataset_states = loadfile(f"new_model_states_{ifdrag}.pkl", tag="data-ham")[0]
     except:
         raise Exception("Generate dataset first.")
     
@@ -181,11 +181,11 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True, saveat = 10, error_fn="
 
     Eei = 5
     Nei = 5
-
+    
     hidden = 5
     nhidden = 2
-
-
+    
+    
     def get_layers(in_, out_):
         return [in_] + [hidden]*nhidden + [out_]
 
@@ -216,33 +216,34 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True, saveat = 10, error_fn="
                 fne=fne_params,
                 fneke=fneke_params,
                 ke=ke_params)
-
-
+    
+    
     def H_energy_fn(params, graph):
-        g, V, T = cal_graph(params, graph, eorder=eorder,
-                            useT=True)
+        g, V, T = cal_graph(params, graph, eorder=eorder, useonlyedge=True, useT=True)
         return T + V
-
-
+    
+    
     R, V = jnp.split(Zs[0], 2, axis=0)
-
+    
     species = jnp.zeros(N, dtype=int)
-    state_graph = jraph.GraphsTuple(nodes={
-        "position": R,
-        "velocity": V,
-        "type": species,
-    },
-        edges={},
-        senders=senders,
-        receivers=receivers,
-        n_node=jnp.array([N]),
-        n_edge=jnp.array([senders.shape[0]]),
-        globals={})
-
-    H_energy_fn(Hparams, state_graph)
-
-
+    # state_graph = jraph.GraphsTuple(nodes={
+    #     "position": R,
+    #     "velocity": V,
+    #     "type": species,
+    # },
+    #     edges={},
+    #     senders=senders,
+    #     receivers=receivers,
+    #     n_node=jnp.array([N]),
+    #     n_edge=jnp.array([senders.shape[0]]),
+    #     globals={})
+    
+    # H_energy_fn(Hparams, state_graph)
+    
+    
     def energy_fn(species):
+        _, _, senders, receivers = chain(N)
+        
         state_graph = jraph.GraphsTuple(nodes={
             "position": R,
             "velocity": V,
@@ -254,7 +255,7 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True, saveat = 10, error_fn="
             n_node=jnp.array([R.shape[0]]),
             n_edge=jnp.array([senders.shape[0]]),
             globals={})
-
+        
         def apply(R, V, params):
             state_graph.nodes.update(position=R)
             state_graph.nodes.update(velocity=V)

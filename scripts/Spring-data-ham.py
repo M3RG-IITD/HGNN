@@ -101,7 +101,8 @@ def main(N=5, dim=2, nconfig=100, saveat=10, ifdrag=0, dt=1e-3, stride = 100, ru
         return -0.1 * (p*p).sum()
         
     def pot_energy_orig(x):
-        dr = jnp.square(x[senders, :] - x[receivers, :]).sum(axis=1)
+        # dr = jnp.square(x[senders, :] - x[receivers, :]).sum(axis=1)
+        dr = x[senders, :] - x[receivers, :]
         return jax.vmap(partial(src.hamiltonian.SPRING, stiffness=1.0, length=1.0))(dr).sum()
     
     
@@ -170,10 +171,10 @@ def main(N=5, dim=2, nconfig=100, saveat=10, ifdrag=0, dt=1e-3, stride = 100, ru
         if ind % saveat == 0:
             print(f"{ind} / {len(init_confs)}")
             print("Saving datafile...")
-            savefile(f"model_states_{ifdrag}.pkl", dataset_states)
+            savefile(f"new_model_states_{ifdrag}.pkl", dataset_states)
 
     print("Saving datafile...")
-    savefile(f"model_states_{ifdrag}.pkl", dataset_states)
+    savefile(f"new_model_states_{ifdrag}.pkl", dataset_states)
 
     print("plotting traj")
 
@@ -200,7 +201,7 @@ def main(N=5, dim=2, nconfig=100, saveat=10, ifdrag=0, dt=1e-3, stride = 100, ru
         axs[1].set_xlabel(r"F$_x$ (constraints)")
         axs[1].set_ylabel(r"F$_y$ (constraints)")
         axs[1].axis("square")
-
+        
         title = f"{N}-spring random state {ind} {ifdrag}"
         plt.suptitle(title, va="bottom")
         plt.savefig(_filename(title.replace(" ", "_")+".png"), dpi=300)

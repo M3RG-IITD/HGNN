@@ -29,6 +29,7 @@ import jraph
 import src
 from jax.config import config
 from src.graph import *
+# from src.graph_interpretability import *
 from src.md import *
 from src.models import MSE, initialize_mlp
 from src.nve import NVEStates, nve
@@ -50,6 +51,7 @@ def pprint(*args, namespace=globals()):
         print(f"{namestr(arg, namespace)[0]}: {arg}")
 
 
+
 # N=5
 # dim=2
 # dt=1.0e-5
@@ -62,14 +64,13 @@ def pprint(*args, namespace=globals()):
 # rname=0
 # saveovito=1
 # trainm=0
-# runs=100
+# runs=1000
 # semilog=1
 # maxtraj=100
 # plotthings=True
 # redo=0
 
-def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints=100, ifdrag=0, seed=42, rname=0, saveovito=1, trainm=0, runs=100, semilog=1, maxtraj=100, plotthings=True, redo=0):
-    
+def main(N=5,dim=2,dt=1.0e-5,stride=1000,useN=None,withdata=None,datapoints=100,ifdrag=0,seed=42,rname=0,saveovito=0,trainm=0,runs=100,semilog=1,maxtraj=100,plotthings=True,redo=0):
     if useN is None:
         useN = N
 
@@ -79,7 +80,7 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     PSYS = f"{N}-Pendulum"
     TAG = f"3HGNN"
     out_dir = f"../results"
-    
+
     randfilename = datetime.now().strftime(
         "%m-%d-%Y_%H-%M-%S") + f"_{datapoints}"
         
@@ -124,7 +125,7 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     savefile = OUT(src.io.savefile)
     save_ovito = OUT(src.io.save_ovito)
     fileexist = OUT(_fileexist)
-
+    
     ################################################
     ################## CONFIG ######################
     ################################################
@@ -148,7 +149,7 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     ################################################
     ################## SYSTEM ######################
     ################################################
-    
+
     pot_energy_orig = PEF
     kin_energy = partial(src.hamiltonian._T, mass=masses)
 
@@ -198,10 +199,10 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
 
     sim_orig = get_forward_sim(
         params=None, zdot_func=zdot_func, runs=runs)
+
     # z_out = sim_orig(R, V)
 
     # x, p = jnp.split(z_out, 2, axis=1)
-
     # def zz(out, ind=None):
     #     if ind is None:
     #         x, p = jnp.split(out, 2, axis=1)
@@ -247,9 +248,12 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     eorder = edge_order(N)
 
     def H_energy_fn(params, graph):
-        g, g_PE, g_KE = cal_graph(params, graph, eorder=eorder,
+        # g, PEij, PEi, KE, _ = cal_graph(params, graph, eorder=eorder,
+        #                             useT=True)
+        # return KE.sum() + PEij.sum() + PEi.sum()
+        g, V, T = cal_graph(params, graph, eorder=eorder,
                                     useT=True)
-        return g_PE + g_KE
+        return V+T
 
     state_graph = jraph.GraphsTuple(nodes={
         "position": R,
@@ -277,7 +281,7 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
             n_node=jnp.array([R.shape[0]]),
             n_edge=jnp.array([senders.shape[0]]),
             globals={})
-
+        
         def apply(R, V, params):
             state_graph.nodes.update(position=R)
             state_graph.nodes.update(velocity=V)
@@ -302,12 +306,12 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     sim_model = get_forward_sim(
         params=params, zdot_func=zdot_model_func, runs=runs)
 
-    # z_model_out = sim_model(R, V)
+    z_model_out = sim_model(R, V)
 
     ################################################
     ############## forward simulation ##############
     ################################################
-    
+
     def norm(a):
         a2 = jnp.square(a)
         n = len(a2)
@@ -323,18 +327,67 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
     def AbsErr(*args):
         return jnp.abs(Err(*args))
 
-    def caH_energy_fn(lag=None, params=None):
+    # def caH_energy_fn(lag=None, params=None):
+    #     def fn(states):
+    #         KE = vmap(kin_energy)(states.velocity)
+    #         H = vmap(lag, in_axes=(0, 0, None)
+    #                     )(states.position, states.velocity, params)
+    #         PE = (H - KE)
+    #         # return jnp.array([H]).T
+    #         return jnp.array([PE, KE,KE-PE, H]).T
+    #     return fn
+
+    def caH_energy_fn_origin(lag=None, params=None):
         def fn(states):
             KE = vmap(kin_energy)(states.velocity)
-            H = vmap(lag, in_axes=(0, 0, None)
-                        )(states.position, states.velocity, params)
-            PE = (H - KE)
-            # return jnp.array([H]).T
-            return jnp.array([PE, KE,KE-PE, H]).T
+            PE = vmap(pot_energy_orig)(states.position)
+            H = KE+PE
+            L = KE-PE
+            return jnp.array([PE, KE, L, H]).T
         return fn
 
-    Es_fn = caH_energy_fn(lag=Hactual, params=None)
-    Es_pred_fn = caH_energy_fn(lag=Hmodel, params=params)
+    def caH_energy_fn_model(kepeh_mod=None, params=None):
+        def fn(states):
+            KE,PE,H = vmap(kepeh_mod, in_axes=(0, 0, None))(states.position, states.velocity, params)
+            
+            return jnp.array([PE, KE, KE-PE, H]).T
+        return fn
+        
+    def KE_PE_H_fn(params, graph):
+        g, g_PE, g_KE = cal_graph(params, graph, eorder=eorder,
+                                    useT=True)
+        return g_KE, g_PE, g_PE + g_KE
+
+    def energy_fn_kph(species):
+        senders, receivers = [np.array(i)
+                                for i in pendulum_connections(R.shape[0])]
+        state_graph = jraph.GraphsTuple(nodes={
+            "position": R,
+            "velocity": V,
+            "type": species
+        },
+            edges={},
+            senders=senders,
+            receivers=receivers,
+            n_node=jnp.array([R.shape[0]]),
+            n_edge=jnp.array([senders.shape[0]]),
+            globals={})
+        
+        def apply_kph(R, V, params):
+            state_graph.nodes.update(position=R)
+            state_graph.nodes.update(velocity=V)
+            return KE_PE_H_fn(params, state_graph)
+        return apply_kph
+
+    apply_fn_kph = energy_fn_kph(species)
+
+    def KE_PE_H_model(x, v, params):
+        return apply_fn_kph(x, v, params["H"])
+
+    # KE_PE_H_model(R, V, params)
+
+    Es_fn = caH_energy_fn_origin(lag=Hactual, params=None)
+    Es_pred_fn = caH_energy_fn_model(kepeh_mod=KE_PE_H_model, params=params)
     # Es_pred_fn(pred_traj)
 
     def net_force_fn(force=None, params=None):
@@ -360,11 +413,13 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
         "Perr": [],
         "simulation_time": [],
         "constraintsF_pred":[],
-        "constraintsF_actual":[]
+        "constraintsF_actual":[],
+        "net_force_orig":[],
+        "net_force_model":[]
     }
 
     trajectories = []
-    
+
     sim_orig2 = get_forward_sim(params=None, zdot_func=zdot_func, runs=runs)
     count=0
     for ind in range(maxtraj):
@@ -457,7 +512,7 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
                         plt.savefig(_filename(f"net_force_Exp_{ind}_{key}.png"))
                     
                     Es = Es_fn(actual_traj)
-                    Eshat = Es_fn(pred_traj)
+                    Eshat = Es_pred_fn(actual_traj)#Es_fn(pred_traj)
                     H = Es[:, -1]
                     Hhat = Eshat[:, -1]
                     
@@ -481,8 +536,12 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
                 else:
                     pass
             
-            Es = Es_fn(actual_traj)
-            Eshat = Es_fn(pred_traj)
+            net_force_orig = net_force_orig_fn(pred_traj)
+            net_force_model = net_force_model_fn(pred_traj)
+            
+            Es = Es_fn(pred_traj)
+            Eshat = Es_pred_fn(pred_traj)#Es_fn(pred_traj)
+            Eshat = Eshat - Eshat[0] + Es[0]
             H = Es[:, -1]
             Hhat = Eshat[:, -1]
             
@@ -503,6 +562,9 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
             nexp["constraintsF_pred"] += [pred_traj.constraint_force]
             nexp["constraintsF_actual"] += [actual_traj.constraint_force]
             
+            nexp["net_force_orig"] += [net_force_orig]
+            nexp["net_force_model"] += [net_force_model]
+            
             zerrrr = RelErr(actual_traj.position, pred_traj.position)
             zerrrr = zerrrr.at[0].set(zerrrr[1])
             nexp["Zerr"] += [zerrrr]    
@@ -515,9 +577,14 @@ def main(N=5, dim=2, dt=1.0e-5,stride=1000, useN=None, withdata=None, datapoints
             if ind%10==0:
                 savefile(f"error_parameter.pkl", nexp)    
                 savefile("trajectories.pkl", trajectories)
+        
         except:
             count+=1
             print(f"skipped:{count}")
+    
+    # print(nexp)
+    savefile(f"error_parameter.pkl", nexp)
+    savefile("trajectories.pkl", trajectories)
     
     def make_plots(nexp, key, yl="Err", xl="Time", key2=None):
         print(f"Plotting err for {key}")

@@ -67,7 +67,7 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
         dt = 1.0e-5, ifdrag = 0, trainm = 1, stride=1000, lr = 0.001, withdata = None, datapoints = None, batch_size = 100):    
     print("Configs: ")
     pprint(N, epochs, seed, rname, dt, lr, ifdrag, batch_size, namespace=locals())
-
+    
     randfilename = datetime.now().strftime("%m-%d-%Y_%H-%M-%S") + f"_{datapoints}"
     
     PSYS = f"{N}-Pendulum"
@@ -91,12 +91,12 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
         def func(file, *args, tag=TAG, **kwargs):
             return f(_filename(file, tag=tag), *args, **kwargs)
         return func
-
+    
     
     loadfile = OUT(src.io.loadfile)
     savefile = OUT(src.io.savefile)
-
-
+    
+    
     ################################################
     ################## CONFIG ######################
     ################################################
@@ -109,15 +109,15 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
         dataset_states = loadfile(f"model_states_{ifdrag}.pkl", tag="data-ham")[0]
     except:
         raise Exception("Generate dataset first.")
-
+    
     if datapoints is not None:
         dataset_states = dataset_states[:datapoints]
-
-
+    
+    
     model_states = dataset_states[0]
     z_out, zdot_out = model_states
     
-
+    
     print(
         f"Total number of data points: {len(dataset_states)}x{z_out.shape[0]}")
     
@@ -125,28 +125,28 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
     N = N2//2
     species = jnp.zeros(N, dtype=int)
     masses = jnp.ones(N)
-
+    
     array = jnp.array([jnp.array(i) for i in dataset_states])
-
+    
     Zs = array[:, 0, :, :, :]
     Zs_dot = array[:, 1, :, :, :]
-
+    
     Zs = Zs.reshape(-1, N2, dim)
     Zs_dot = Zs_dot.reshape(-1, N2, dim)
-
+    
     mask = np.random.choice(len(Zs), len(Zs), replace=False)
     allZs = Zs[mask]
     allZs_dot = Zs_dot[mask]
-
+    
     Ntr = int(0.75*len(Zs))
     Nts = len(Zs) - Ntr
-
+    
     Zs = allZs[:Ntr]
     Zs_dot = allZs_dot[:Ntr]
-
+    
     Zst = allZs[Ntr:]
     Zst_dot = allZs_dot[Ntr:]
-
+    
     ################################################
     ################## SYSTEM ######################
     ################################################
@@ -208,7 +208,7 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
                 fne=fne_params,
                 fneke=fneke_params,
                 ke=ke_params)
-
+    
 
     def H_energy_fn(params, graph):
         g, V, T = cal_graph(params, graph, eorder=eorder,
@@ -218,19 +218,7 @@ def main(N = 5, epochs = 10000, seed = 42, rname = True,
 
     R, V = jnp.split(Zs[0], 2, axis=0)
     
-    state_graph = jraph.GraphsTuple(nodes={
-        "position": R,
-        "velocity": V,
-        "type": species,
-    },
-        edges={},
-        senders=senders,
-        receivers=receivers,
-        n_node=jnp.array([N]),
-        n_edge=jnp.array([senders.shape[0]]),
-        globals={})
-
-
+    
     def energy_fn(species):
         senders, receivers = [np.array(i)
                             for i in pendulum_connections(R.shape[0])]

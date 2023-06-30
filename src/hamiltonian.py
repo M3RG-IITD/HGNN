@@ -24,13 +24,17 @@ def get_zdot_lambda(N, Dim, hamiltonian, drag=None, constraints=None, external_f
     dim = N*Dim
     I = jnp.eye(dim)
     J = jnp.zeros((2*dim, 2*dim))
-    J = jax.ops.index_update(J, jax.ops.index[:dim, dim:], I)
-    J = jax.ops.index_update(J, jax.ops.index[dim:, :dim], -I)
-
+    J = J.at[:dim, dim:].set(I)
+    J = J.at[dim:, :dim].set(-I)
+    # J = jax.ops.index_update(J, jax.ops.index[:dim, dim:], I)
+    # J = jax.ops.index_update(J, jax.ops.index[dim:, :dim], -I)
+    
     J2 = jnp.zeros((2*dim, 2*dim))
-    J2 = jax.ops.index_update(J2, jax.ops.index[:dim, :dim], I)
-    J2 = jax.ops.index_update(J2, jax.ops.index[dim:, dim:], I)
-
+    J2 = J2.at[:dim, :dim].set(I)
+    J2 = J2.at[dim:, dim:].set(I)
+    # J2 = jax.ops.index_update(J2, jax.ops.index[:dim, :dim], I)
+    # J2 = jax.ops.index_update(J2, jax.ops.index[dim:, dim:], I)
+    
     def dH_dz(x, p, params):
         dH_dx = jax.grad(hamiltonian, 0)(x, p, params)
         dH_dp = jax.grad(hamiltonian, 1)(x, p, params)

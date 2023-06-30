@@ -130,7 +130,7 @@ class VV_unroll():
     def __init__(self, R, dt=1):
         self.R = R
         self.dt = dt
-    
+
     def get_position(self):
         r = self.R[1:-1]
         return r
@@ -143,7 +143,7 @@ class VV_unroll():
             return (r_plus + r_minus - 2*r)/dt**2
         else:
             return (r_plus + r_minus - 2*r)/self.dt**2
-    
+
     def get_velocity(self, dt=None):
         r_minus = self.R[:-2]
         r_plus = self.R[2:]
@@ -151,7 +151,7 @@ class VV_unroll():
             return (r_plus - r_minus)/2/dt
         else:
             return (r_plus - r_minus)/2/self.dt
-    
+
     def get_all(self, dt=None):
         return self.get_position(), self.get_velocity(dt=dt), self.get_acceleration(dt=dt)
 
@@ -245,6 +245,7 @@ def nCk(n, k):
 
 def Range(*args, **kwargs): return jnp.array(range(*args, **kwargs))
 
+
 def make_graph(R, disp_fn, species=None, atoms=None, V=None, A=None, mass=None, cutoff=2.0):
     """Make graph from position of atoms.
 
@@ -263,20 +264,20 @@ def make_graph(R, disp_fn, species=None, atoms=None, V=None, A=None, mass=None, 
     :return: graph
     :rtype: dict
     """
-    
+
     if species is None:
         species = jnp.hstack([ind*jnp.ones(v, dtype=int).flatten()
                               for ind, v in enumerate(atoms.values())])
 
     species = species.astype(int)
-    
+
     # a != b
     bond_mask = vmap(vmap(lambda a, b: True, in_axes=(
         0, None)), in_axes=(None, 0))(species, species)
     
     if mass is not None:
         mass = jnp.array(mass, dtype=float)[species]
-    
+
     nodes = {
         "position": R,
         "velocity": V,
@@ -284,90 +285,33 @@ def make_graph(R, disp_fn, species=None, atoms=None, V=None, A=None, mass=None, 
         "type": species,
         "mass": mass,
     }
-    
+
     dd = (vmap(vmap(disp_fn, in_axes=(0, None)),
           in_axes=(None, 0))(R, R)**2).sum(axis=-1)**0.5
     mask = dd < cutoff
-    # mask = mask*bond_mask
-    mask = mask.at[Range(len(R)), Range(len(R))].set(False)
+      
+    mask = mask*bond_mask
+    mask.at[Range(len(R)), Range(len(R))].set(False) 
     # jax.ops.index_update(
         # mask, jax.ops.index[Range(len(R)), Range(len(R))], False)
-    
+
     inds = Range(len(R))
     NUMBER = jnp.zeros(mask.shape, dtype=int)
     # NUMBER = jax.ops.index_update(
     #     NUMBER, jax.ops.index[mask], Range(mask.sum()))
-    NUMBER = NUMBER.at[mask].set(Range(mask.sum()))
+    NUMBER.at[mask].set(Range(mask.sum()))
     edge_order = NUMBER.T[mask]
-    
+
     ROWS = vmap(lambda row, ind: row*ind, in_axes=(0, 0))(mask, inds)
     # edges = jnp.vstack([ROWS[mask], ROWS.T[mask]]).T
     senders = ROWS[mask]
     receivers = ROWS.T[mask]
     edges = {}
-    
+
     graph = dict(nodes=nodes, edges=edges, e_order=edge_order,
                  receivers=receivers, senders=senders, n_node=jnp.array([len(R)], dtype=int), n_edge=jnp.array([len(senders)], dtype=int), atoms=atoms)
     return graph
 
-def create_G(R, Disp_Vec_fn, pair_cutoffs, V=None, A= None, mass=None, species=None, atoms = None):
-    """
-    R: Node Positions
-    Disp_vec_fn: Calculates distance between atoms considering periodic boundaries
-    species: Node type info 0 and 1
-    cutoffs: pair cutoffs (N,N) shape
-    sigma  : pair sigma   (N,N)
-        """
-    
-    if species is None:
-        species = jnp.hstack([ind*jnp.ones(v, dtype=int).flatten()
-                              for ind, v in enumerate(atoms.values())])
-    species = species.astype(int)
-    
-    if mass is not None:
-        mass = jnp.array(mass, dtype=float)[species]
-    
-    #1: Calculate pair distances
-    R_pair = Disp_Vec_fn(R, R)
-    dr_pair =jax_md.space.distance(R_pair)
-    
-    #3: Creating neigh_list and senders and receivers    
-    n_list=(dr_pair<pair_cutoffs).astype(int)
-    n_list=n_list.at[jnp.diag_indices_from(n_list)].set(0)
-    (senders,receivers)=jnp.where(n_list==1)
-    
-    #4: edge order
-    mask = dr_pair<pair_cutoffs
-    mask = mask.at[Range(len(R)), Range(len(R))].set(False)
-    NUMBER = jnp.zeros(mask.shape, dtype=int)
-    NUMBER = NUMBER.at[mask].set(Range(mask.sum()))
-    edge_order = NUMBER.T[mask]
-    
-    #5: Node features
-    Node_feats = {
-        "position": R,
-        "velocity": V,
-        "acceleration": A,
-        "type": species,
-        "mass": mass,
-        }
-    
-    #6: Edge Features
-    # dist_2d=R_pair[senders,receivers,:]
-    # Edge_feats=dist_2d
-    Edge_feats ={}
-    
-    #7: atoms type        
-    # atoms = {
-    #     "A": sum(species == 0),
-    #     "B": sum(species == 1)
-    #     }
-
-    G=dict(nodes=Node_feats, edges=Edge_feats, e_order = edge_order,
-            receivers=receivers, senders=senders, n_node=jnp.array([len(R)], dtype=int),
-            n_edge=jnp.array([len(senders)], dtype=int), atoms=atoms)
-                                
-    return G , n_list
 
 def fileloc(f, fileloc, TAG=""):
     """Append filename with fileloc and TAG.

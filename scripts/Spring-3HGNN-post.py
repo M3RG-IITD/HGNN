@@ -29,7 +29,8 @@ sys.path.append(MAINPATH)  # nopep8
 import jraph
 import src
 from jax.config import config
-from src.graph import *
+# from src.graph import *
+from src.graph_interpretability import *
 from src.md import *
 from src.models import MSE, initialize_mlp
 from src.nve import NVEStates, nve
@@ -110,7 +111,7 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
             return f(_filename(file, tag=tag, trained=trained),
                      *args, **kwargs)
         return func
-
+    
     def _fileexist(f):
         if redo:
             return False
@@ -163,7 +164,8 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
     ################################################
     
     def pot_energy_orig(x):
-        dr = jnp.square(x[senders, :] - x[receivers, :]).sum(axis=1)
+        # dr = jnp.square(x[senders, :] - x[receivers, :]).sum(axis=1)
+        dr = x[senders, :] - x[receivers, :]
         return jax.vmap(partial(src.hamiltonian.SPRING, stiffness=1.0, length=1.0))(dr).sum()
     
     
@@ -228,12 +230,14 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
     ################################################
     ################### ML Model ###################
     ################################################
-
+    # def H_energy_fn(params, graph):
+    #     g, g_PE, g_KE = cal_graph(params, graph, eorder=eorder, useonlyedge=True, useT=True)
+    #     return g_PE + g_KE
+    
     def H_energy_fn(params, graph):
-        g, g_PE, g_KE = cal_graph(params, graph, eorder=eorder,
-                                  useT=True)
-        return g_PE + g_KE
-
+        g, PEij, PEi, KE, _ = cal_graph(params, graph, eorder=eorder, useonlyedge=True, useT=True)
+        return KE.sum() + PEij.sum() + PEi.sum()
+    
     state_graph = jraph.GraphsTuple(nodes={
         "position": R,
         "velocity": V,
@@ -249,6 +253,8 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
     def energy_fn(species):
         # senders, receivers = [np.array(i)
         #                       for i in Spring_connections(R.shape[0])]
+        _, _, senders, receivers = chain(N)
+
         state_graph = jraph.GraphsTuple(nodes={
             "position": R,
             "velocity": V,
@@ -301,7 +307,37 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
         params=params, zdot_func=zdot_model_func, runs=runs)
     
     # z_model_out = sim_model(R, V)
+    
+    def KE_PE_H_fn(params, graph):
+        g, PEij, PEi, KE, _ = cal_graph(params, graph, eorder=eorder,useonlyedge=True, useT=True)
+        return KE.sum(), PEij.sum() + PEi.sum(), KE.sum() + PEij.sum() + PEi.sum()
 
+    def energy_fn_kph(species):
+        _, _, senders, receivers = chain(R.shape[0])
+        
+        state_graph = jraph.GraphsTuple(nodes={
+            "position": R,
+            "velocity": V,
+            "type": species
+        },
+            edges={},
+            senders=senders,
+            receivers=receivers,
+            n_node=jnp.array([R.shape[0]]),
+            n_edge=jnp.array([senders.shape[0]]),
+            globals={})
+        
+        def apply_kph(R, V, params):
+            state_graph.nodes.update(position=R)
+            state_graph.nodes.update(velocity=V)
+            return KE_PE_H_fn(params, state_graph)
+        return apply_kph
+
+    apply_fn_kph = energy_fn_kph(species)
+
+    def KE_PE_H_model(x, v, params):
+        return apply_fn_kph(x, v, params["H"])
+    
     ################################################
     ############## forward simulation ##############
     ################################################
@@ -321,18 +357,35 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
     def AbsErr(*args):
         return jnp.abs(Err(*args))
 
-    def caH_energy_fn(lag=None, params=None):
+    # def caH_energy_fn(lag=None, params=None):
+    #     def fn(states):
+    #         KE = vmap(kin_energy)(states.velocity)
+    #         H = vmap(lag, in_axes=(0, 0, None)
+    #                  )(states.position, states.velocity, params)
+    #         PE = (H - KE)
+    #         # return jnp.array([H]).T
+    #         return jnp.array([PE, KE, KE-PE, H]).T
+    #     return fn
+    def caH_energy_fn_origin(lag=None, params=None):
         def fn(states):
             KE = vmap(kin_energy)(states.velocity)
-            H = vmap(lag, in_axes=(0, 0, None)
-                     )(states.position, states.velocity, params)
-            PE = (H - KE)
-            # return jnp.array([H]).T
-            return jnp.array([PE, KE, KE-PE, H]).T
+            PE = vmap(pot_energy_orig)(states.position)
+            H = KE+PE
+            L = KE-PE
+            return jnp.array([PE, KE, L, H]).T
         return fn
 
-    Es_fn = caH_energy_fn(lag=Hactual, params=None)
-    Es_pred_fn = caH_energy_fn(lag=Hmodel, params=params)
+    def caH_energy_fn_model(lag=None, params=None):
+        def fn(states):
+            KE,PE,H = vmap(KE_PE_H_model, in_axes=(0, 0, None))(states.position, states.velocity, params)
+            return jnp.array([PE, KE, KE-PE, H]).T
+        return fn
+        
+    Es_fn = caH_energy_fn_origin(lag=Hactual, params=None)
+    Es_pred_fn = caH_energy_fn_model(lag=Hmodel, params=params)
+    
+    # Es_fn = caH_energy_fn(lag=Hactual, params=None)
+    # Es_pred_fn = caH_energy_fn(lag=Hmodel, params=params)
     # Es_pred_fn(pred_traj)
 
     def net_force_fn(force=None, params=None):
@@ -358,161 +411,178 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
         "Perr": [],
         "simulation_time": [],
         "constraintsF_pred":[],
-        "constraintsF_actual":[]
+        "constraintsF_actual":[],
+        "net_force_orig":[],
+        "net_force_model":[]
     }
     
     trajectories = []
 
     sim_orig2 = get_forward_sim(params=None, zdot_func=zdot_func, runs=runs)
-
+    
     for ind in range(maxtraj):
-        try:
-            print(f"Simulating trajectory {ind}/{maxtraj} ...")
-            
-            # R = full_traj[_ind].position
-            # V = full_traj[_ind].velocity
-            # start_ = _ind+1
-            # stop_ = start_+runs
-            
-            # z_out, _ = dataset_states[ind]
-            # xout, pout = jnp.split(z_out, 2, axis=1)
-            
-            # R = xout[0]
-            # V = pout[0]
-            
-            R, V = chain(N)[:2]
-            
-            z_actual_out = sim_orig2(R, V)  # full_traj[start_:stop_]
-            x_act_out, p_act_out = jnp.split(z_actual_out, 2, axis=1)
-            zdot_act_out = jax.vmap(zdot, in_axes=(0, 0, None))(
-                x_act_out, p_act_out, None)
-            _, force_act_out = jnp.split(zdot_act_out, 2, axis=1)
-            my_state = States()
-            my_state.position = x_act_out
-            my_state.velocity = p_act_out
-            my_state.force = force_act_out
-            my_state.mass = jnp.ones(x_act_out.shape[0])
-            actual_traj = my_state
+        # try:
+        print(f"Simulating trajectory {ind}/{maxtraj} ...")
+        
+        # R = full_traj[_ind].position
+        # V = full_traj[_ind].velocity
+        # start_ = _ind+1
+        # stop_ = start_+runs
+        
+        # z_out, _ = dataset_states[ind]
+        # xout, pout = jnp.split(z_out, 2, axis=1)
+        
+        # R = xout[0]
+        # V = pout[0]
+        
+        R, V = chain(N)[:2]
+        
+        z_actual_out = sim_orig2(R, V)  # full_traj[start_:stop_]
+        x_act_out, p_act_out = jnp.split(z_actual_out, 2, axis=1)
+        zdot_act_out = jax.vmap(zdot, in_axes=(0, 0, None))(
+            x_act_out, p_act_out, None)
+        _, force_act_out = jnp.split(zdot_act_out, 2, axis=1)
+        c_force_actual = jax.vmap(lamda_force, in_axes=(0, 0, None))(x_act_out, p_act_out, None)
+        
+        my_state = States()
+        my_state.position = x_act_out
+        my_state.velocity = p_act_out
+        my_state.constraint_force = c_force_actual
+        my_state.force = force_act_out
+        my_state.mass = jnp.ones(x_act_out.shape[0])
+        actual_traj = my_state
+        
+        z_pred_out = sim_model(R, V)
+        x_pred_out, p_pred_out = jnp.split(z_pred_out, 2, axis=1)
+        zdot_pred_out = jax.vmap(zdot_model, in_axes=(
+            0, 0, None))(x_pred_out, p_pred_out, params)
+        _, force_pred_out = jnp.split(zdot_pred_out, 2, axis=1)
+        c_force_model = jax.vmap(lamda_force_model, in_axes=(0, 0, None))(x_pred_out, p_pred_out, params)
 
-            z_pred_out = sim_model(R, V)
-            x_pred_out, p_pred_out = jnp.split(z_pred_out, 2, axis=1)
-            zdot_pred_out = jax.vmap(zdot_model, in_axes=(
-                0, 0, None))(x_pred_out, p_pred_out, params)
-            _, force_pred_out = jnp.split(zdot_pred_out, 2, axis=1)
-            my_state_pred = States()
-            my_state_pred.position = x_pred_out
-            my_state_pred.velocity = p_pred_out
-            my_state_pred.force = force_pred_out
-            my_state_pred.mass = jnp.ones(x_pred_out.shape[0])
-            pred_traj = my_state_pred
+        my_state_pred = States()
+        my_state_pred.position = x_pred_out
+        my_state_pred.velocity = p_pred_out
+        my_state_pred.constraint_force = c_force_model
+        my_state_pred.force = force_pred_out
+        my_state_pred.mass = jnp.ones(x_pred_out.shape[0])
+        pred_traj = my_state_pred
+        
+        if saveovito:
+            if ind < 1:
+                save_ovito(f"pred_{ind}.data", [
+                    state for state in NVEStates(pred_traj)], lattice="")
+                save_ovito(f"actual_{ind}.data", [
+                    state for state in NVEStates(actual_traj)], lattice="")
+            else:
+                pass
+        
+        if plotthings:
+            if ind<1:
+                for key, traj in {"actual": actual_traj}.items():#, "pred": pred_traj}.items():
+                    
+                    print(f"plotting energy ({key})...")
+                    
+                    Es = Es_fn(traj)
+                    Es_pred = Es_pred_fn(traj)
+                    Es_pred = Es_pred - Es_pred[0] + Es[0]
+                    
+                    net_force_orig = net_force_orig_fn(traj)
+                    net_force_model = net_force_model_fn(traj)
 
-            if saveovito:
-                if ind < 1:
-                    save_ovito(f"pred_{ind}.data", [
-                        state for state in NVEStates(pred_traj)], lattice="")
-                    save_ovito(f"actual_{ind}.data", [
-                        state for state in NVEStates(actual_traj)], lattice="")
-                else:
-                    pass
-            
-            
-            if plotthings:
-                if ind<1:
-                    for key, traj in {"actual": actual_traj, "pred": pred_traj}.items():
+                    fig, axs = panel(1+R.shape[0], 1, figsize=(20,
+                                                            R.shape[0]*5), hshift=0.1, vs=0.35)
+                    for i, ax in zip(range(R.shape[0]+1), axs):
+                        if i == 0:
+                            ax.text(0.6, 0.8, "Averaged over all particles",
+                                    transform=ax.transAxes, color="k")
+                            ax.plot(net_force_orig.sum(axis=1), lw=6, label=[
+                                    r"$F_x$", r"$F_y$", r"$F_z$"][:R.shape[1]], alpha=0.5)
+                            ax.plot(net_force_model.sum(axis=1), "--", color="k")
+                            ax.plot([], "--", c="k", label="Predicted")
+                        else:
+                            ax.text(0.6, 0.8, f"For particle {i}",
+                                    transform=ax.transAxes, color="k")
+                            ax.plot(net_force_orig[:, i-1, :], lw=6, label=[r"$F_x$",
+                                    r"$F_y$", r"$F_z$"][:R.shape[1]], alpha=0.5)
+                            ax.plot(net_force_model[:, i-1, :], "--", color="k")
+                            ax.plot([], "--", c="k", label="Predicted")
 
-                        print(f"plotting energy ({key})...")
-                        
-                        Es = Es_fn(traj)
-                        Es_pred = Es_pred_fn(traj)
-                        Es_pred = Es_pred - Es_pred[0] + Es[0]
-                        
-                        net_force_orig = net_force_orig_fn(traj)
-                        net_force_model = net_force_model_fn(traj)
-
-                        fig, axs = panel(1+R.shape[0], 1, figsize=(20,
-                                                                R.shape[0]*5), hshift=0.1, vs=0.35)
-                        for i, ax in zip(range(R.shape[0]+1), axs):
-                            if i == 0:
-                                ax.text(0.6, 0.8, "Averaged over all particles",
-                                        transform=ax.transAxes, color="k")
-                                ax.plot(net_force_orig.sum(axis=1), lw=6, label=[
-                                        r"$F_x$", r"$F_y$", r"$F_z$"][:R.shape[1]], alpha=0.5)
-                                ax.plot(net_force_model.sum(axis=1), "--", color="k")
-                                ax.plot([], "--", c="k", label="Predicted")
-                            else:
-                                ax.text(0.6, 0.8, f"For particle {i}",
-                                        transform=ax.transAxes, color="k")
-                                ax.plot(net_force_orig[:, i-1, :], lw=6, label=[r"$F_x$",
-                                        r"$F_y$", r"$F_z$"][:R.shape[1]], alpha=0.5)
-                                ax.plot(net_force_model[:, i-1, :], "--", color="k")
-                                ax.plot([], "--", c="k", label="Predicted")
-
-                            ax.legend(loc=2, bbox_to_anchor=(1, 1),
-                                    labelcolor="markerfacecolor")
-                            ax.set_ylabel("Net force")
-                            ax.set_xlabel("Time step")
-                            ax.set_title(f"{N}-Spring Exp {ind}")
-                        # , dpi=500)
-                        plt.savefig(_filename(f"net_force_Exp_{ind}_{key}.png"))
-            
-                    Es = Es_fn(actual_traj)
-                    Eshat = Es_fn(pred_traj)
-                    H = Es[:, -1]
-                    Hhat = Eshat[:, -1]
+                        ax.legend(loc=2, bbox_to_anchor=(1, 1),
+                                labelcolor="markerfacecolor")
+                        ax.set_ylabel("Net force")
+                        ax.set_xlabel("Time step")
+                        ax.set_title(f"{N}-Spring Exp {ind}")
+                    plt.savefig(_filename(f"net_force_Exp_{ind}_{key}.png"))
+                    
+                    Es = Es_fn(traj)
+                    Eshat = Es_fn(traj)
+                    Eshat = Eshat - Eshat[0] + Es[0]
                     
                     fig, axs = panel(1, 1, figsize=(20, 5))
                     axs[0].plot(Es, label=["PE", "KE", "L", "TE"], lw=6, alpha=0.5)
                     axs[0].plot(Eshat, "--", label=["PE", "KE", "L", "TE"])
                     plt.legend(bbox_to_anchor=(1, 1), loc=2)
                     axs[0].set_facecolor("w")
-
+                    
                     xlabel("Time step", ax=axs[0])
                     ylabel("Energy", ax=axs[0])
                     
                     title = f"HGNN {N}-Spring Exp {ind}"
                     axs[0].set_title(title)
                     plt.savefig(_filename(title.replace(" ", "-")+f".png"))  # , dpi=500)
-                else:
-                    pass
-            
-            Es = Es_fn(actual_traj)
-            Eshat = Es_fn(pred_traj)
-            H = Es[:, -1]
-            Hhat = Eshat[:, -1]
-            
-            herrrr = RelErr(H, Hhat)
-            herrrr = herrrr.at[0].set(herrrr[1])
-            nexp["Herr"] += [herrrr]
-            
-            nexp["Es"] += [Es]
-            nexp["Eshat"] += [Eshat]
-            
-            
-            nexp["z_pred"] += [pred_traj.position]
-            nexp["z_actual"] += [actual_traj.position]
-            
-            nexp["v_pred"] += [pred_traj.velocity]
-            nexp["v_actual"] += [actual_traj.velocity]
-            
-            nexp["constraintsF_pred"] += [pred_traj.constraint_force]
-            nexp["constraintsF_actual"] += [actual_traj.constraint_force]
-            
-            zerrrr = RelErr(actual_traj.position, pred_traj.position)
-            zerrrr = zerrrr.at[0].set(zerrrr[1])
-            nexp["Zerr"] += [zerrrr]    
-            
-            ac_mom = jnp.square(actual_traj.velocity.sum(1)).sum(1)
-            pr_mom = jnp.square(pred_traj.velocity.sum(1)).sum(1)
-            nexp["Perr"] += [ac_mom - pr_mom]
-            
-            trajectories += [(actual_traj, pred_traj)]
-
-            if ind%10==0:
-                savefile("trajectories.pkl", trajectories)
-                savefile(f"error_parameter.pkl", nexp)
+                        
+            else:
+                pass
         
-        except:
-            pass
+        net_force_orig = net_force_orig_fn(pred_traj)
+        net_force_model = net_force_model_fn(pred_traj)
+        
+        Es = Es_fn(pred_traj)
+        Eshat = Es_pred_fn(pred_traj)
+        Eshat = Eshat - Eshat[0] + Es[0]
+        
+        H = Es[:, -1]
+        Hhat = Eshat[:, -1]
+        
+        herrrr = RelErr(H, Hhat)
+        herrrr = herrrr.at[0].set(herrrr[1])
+        nexp["Herr"] += [herrrr]
+        
+        nexp["Es"] += [Es]
+        nexp["Eshat"] += [Eshat]
+        
+        
+        nexp["z_pred"] += [pred_traj.position]
+        nexp["z_actual"] += [actual_traj.position]
+        
+        nexp["v_pred"] += [pred_traj.velocity]
+        nexp["v_actual"] += [actual_traj.velocity]
+        
+        nexp["constraintsF_pred"] += [pred_traj.constraint_force]
+        nexp["constraintsF_actual"] += [actual_traj.constraint_force]
+        
+        nexp["net_force_orig"] += [net_force_orig]
+        nexp["net_force_model"] += [net_force_model]
+        
+
+        zerrrr = RelErr(actual_traj.position, pred_traj.position)
+        zerrrr = zerrrr.at[0].set(zerrrr[1])
+        # print(zerrrr)
+        nexp["Zerr"] += [zerrrr]    
+        
+        ac_mom = jnp.square(actual_traj.velocity.sum(1)).sum(1)
+        pr_mom = jnp.square(pred_traj.velocity.sum(1)).sum(1)
+        nexp["Perr"] += [ac_mom - pr_mom]
+        
+        trajectories += [(actual_traj, pred_traj)]
+        
+        if ind%10==0:
+            savefile("trajectories.pkl", trajectories)
+            savefile(f"error_parameter.pkl", nexp)
+    
+        # except:
+        #     print('outttttttt')
+        #     pass
     def make_plots(nexp, key, yl="Err", xl="Time", key2=None):
         print(f"Plotting err for {key}")
         fig, axs = panel(1, 1)
@@ -535,7 +605,6 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
         plt.savefig(_filename(f"RelError_{filepart}.png"))  # , dpi=500)
 
         fig, axs = panel(1, 1)
-
         mean_ = jnp.log(jnp.array(nexp[key])).mean(axis=0)
         std_ = jnp.log(jnp.array(nexp[key])).std(axis=0)
 
@@ -553,10 +622,10 @@ def main(N=5, dim=2, dt=1.0e-3, stride=100, useN=None, withdata=None, datapoints
         plt.xlabel("Time")
         plt.savefig(_filename(f"RelError_std_{key}.png"))  # , dpi=500)
 
-    make_plots(
-        nexp, "Zerr", yl=r"$\frac{||\hat{z}-z||_2}{||\hat{z}||_2+||z||_2}$")
-    make_plots(nexp, "Herr",
-               yl=r"$\frac{||H(\hat{z})-H(z)||_2}{||H(\hat{z})||_2+||H(z)||_2}$")
+    # make_plots(
+    #     nexp, "Zerr", yl=r"$\frac{||\hat{z}-z||_2}{||\hat{z}||_2+||z||_2}$")
+    # make_plots(nexp, "Herr",
+    #            yl=r"$\frac{||H(\hat{z})-H(z)||_2}{||H(\hat{z})||_2+||H(z)||_2}$")
 
 
 fire.Fire(main)

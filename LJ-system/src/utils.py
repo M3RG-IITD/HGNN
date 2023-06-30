@@ -217,6 +217,74 @@ class States:
             acceleration = self.force/self.mass
         return self.position, self.velocity, acceleration
 
+class States_H:
+    def __init__(self, state=None, const_size=True):
+        if state is None:
+            self.isarrays = False
+            self.const_size = const_size
+            self.position = []
+            self.velocity = []
+            self.constraint_force = []
+            self.force = []
+            if self.const_size:
+                self.mass = None
+            else:
+                self.mass = []
+        else:
+            self.position = [state.position]
+            self.velocity = [state.velocity]
+            self.constraint_force = [state.constraint_force]
+            self.force = [state.force]
+            if self.const_size:
+                self.mass = state.mass
+            else:
+                self.mass = [state.mass]
+
+    def add(self, state):
+        self.position += [state.position]
+        self.velocity += [state.velocity]
+        self.constraint_force += [state.constraint_force]
+        self.force += [state.force]
+        if self.const_size:
+            if self.mass is None:
+                self.mass = state.mass
+        else:
+            self.mass += [state.mass]
+
+    def fromlist(self, states, const_size=True):
+        out = States(const_size=const_size)
+        for state in states:
+            out.add(state)
+        return out
+
+    def makearrays(self):
+        if not(self.isarrays):
+            self.position = jnp.array(self.position)
+            self.velocity = jnp.array(self.velocity)
+            self.constraint_force = jnp.array(self.constraint_force)
+            self.force = jnp.array(self.force)
+            self.mass = jnp.array([self.mass])
+            self.isarrays = True
+
+    def get_array(self):
+        self.makearrays()
+        return self.position, self.velocity, self.constraint_force, self.force
+    
+    def get_mass(self):
+        self.makearrays()
+        return self.mass
+    
+    def get_kin(self):
+        self.makearrays()
+        if self.const_size:
+            acceleration = self.force/self.mass.reshape(1, self.mass.shape)
+        else:
+            acceleration = self.force/self.mass
+        return self.position, self.velocity, self.constraint_force, acceleration
+
+    def __repr__(self) -> str:
+        return "position="+self.position.__repr__() + ", velocity="+self.velocity.__repr__() + ", constraint_force="+self.constraint_force.__repr__() + ", force=" + self.force.__repr__()
+
 
 def reload(list_of_modules):
     for module in list_of_modules:
@@ -245,7 +313,7 @@ def nCk(n, k):
 
 def Range(*args, **kwargs): return jnp.array(range(*args, **kwargs))
 
-def make_graph(R, disp_fn, species=None, atoms=None, V=None, A=None, mass=None, cutoff=2.0):
+def make_graph(R, disp_fn, species=None, atoms=None, V=None, A=None, mass=None, cutoff=2.5):
     """Make graph from position of atoms.
 
     :param R: position

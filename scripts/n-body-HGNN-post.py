@@ -338,15 +338,29 @@ def main(N=4, dim=3, dt=1.0e-3, stride=100, useN=4, withdata=None, datapoints=10
     net_force_orig_fn = net_force_fn(force=zdot)
     net_force_model_fn = net_force_fn(force=zdot_model, params=params)
 
+    # nexp = {
+    #     "z_pred": [],
+    #     "z_actual": [],
+    #     "Zerr": [],
+    #     "Herr": [],
+    #     "E": [],
+    #     "Perr": [],
+    # }
     nexp = {
         "z_pred": [],
         "z_actual": [],
+        "v_pred": [],
+        "v_actual": [],
         "Zerr": [],
         "Herr": [],
-        "E": [],
+        "Es": [],
+        "Eshat":[],
         "Perr": [],
+        "simulation_time": [],
+        "net_force_orig":[],
+        "net_force_model":[]
     }
-
+    
     trajectories = []
 
     sim_orig2 = get_forward_sim(params=None, zdot_func=zdot_func, runs=runs)
@@ -401,30 +415,10 @@ def main(N=4, dim=3, dt=1.0e-3, stride=100, useN=4, withdata=None, datapoints=10
         if plotthings:
             if ind<1:
                 for key, traj in {"actual": actual_traj, "pred": pred_traj}.items():
-
-                    print(f"plotting energy ({key})...")
-
-                    Es = Es_fn(traj)
-                    Es_pred = Es_pred_fn(traj)
-                    Es_pred = Es_pred - Es_pred[0] + Es[0]
-
-                    fig, axs = panel(1, 1, figsize=(20, 5))
-                    axs[0].plot(Es, label=["PE", "KE", "L", "TE"], lw=6, alpha=0.5)
-                    axs[0].plot(Es_pred, "--", label=["PE", "KE", "L", "TE"])
-                    plt.legend(bbox_to_anchor=(1, 1), loc=2)
-                    axs[0].set_facecolor("w")
-
-                    xlabel("Time step", ax=axs[0])
-                    ylabel("Energy", ax=axs[0])
-
-                    title = f"(HGNN) {N}-Spring Exp {ind}"
-                    plt.title(title)
-                    plt.savefig(_filename(title.replace(
-                        " ", "-")+f"_{key}.png"))  # , dpi=500)
-
+                    
                     net_force_orig = net_force_orig_fn(traj)
                     net_force_model = net_force_model_fn(traj)
-
+                    
                     fig, axs = panel(1+R.shape[0], 1, figsize=(20,
                                                             R.shape[0]*5), hshift=0.1, vs=0.35)
                     for i, ax in zip(range(R.shape[0]+1), axs):
@@ -453,6 +447,8 @@ def main(N=4, dim=3, dt=1.0e-3, stride=100, useN=4, withdata=None, datapoints=10
         
                 Es = Es_fn(actual_traj)
                 Eshat = Es_fn(pred_traj)
+                Eshat = Eshat - Eshat[0] + Es[0]
+
                 H = Es[:, -1]
                 Hhat = Eshat[:, -1]
 
@@ -480,27 +476,50 @@ def main(N=4, dim=3, dt=1.0e-3, stride=100, useN=4, withdata=None, datapoints=10
                 plt.savefig(_filename(title.replace(" ", "-")+f".png"))  # , dpi=500)
             else:
                 pass
+        
+        net_force_orig = net_force_orig_fn(pred_traj)
+        net_force_model = net_force_model_fn(pred_traj)
+        
+        Es = Es_fn(pred_traj)
+        Eshat = Es_pred_fn(pred_traj)
+        Eshat = Eshat - Eshat[0] + Es[0]
 
-        Es = Es_fn(actual_traj)
-        Eshat = Es_fn(pred_traj)
         H = Es[:, -1]
         Hhat = Eshat[:, -1]
         
-        nexp["Herr"] += [RelErr(H, Hhat)+1e-30]
-        nexp["E"] += [Es, Eshat]
+        herrrr = RelErr(H, Hhat)
+        herrrr = herrrr.at[0].set(herrrr[1])
+        nexp["Herr"] += [herrrr]
+        
+        nexp["Es"] += [Es]
+        nexp["Eshat"] += [Eshat]
+        
         
         nexp["z_pred"] += [pred_traj.position]
         nexp["z_actual"] += [actual_traj.position]
-        nexp["Zerr"] += [RelErr(actual_traj.position,
-                                pred_traj.position)+1e-30]
+        
+        nexp["v_pred"] += [pred_traj.velocity]
+        nexp["v_actual"] += [actual_traj.velocity]
+        
+        nexp["net_force_orig"] += [net_force_orig]
+        nexp["net_force_model"] += [net_force_model]
+        
+        zerrrr = RelErr(actual_traj.position, pred_traj.position)
+        zerrrr = zerrrr.at[0].set(zerrrr[1])
+        # print(zerrrr)
+        nexp["Zerr"] += [zerrrr]    
+        
         ac_mom = jnp.square(actual_traj.velocity.sum(1)).sum(1)
         pr_mom = jnp.square(pred_traj.velocity.sum(1)).sum(1)
-        nexp["Perr"] += [jnp.absolute(ac_mom - pr_mom)+1e-30]
+        nexp["Perr"] += [ac_mom - pr_mom]
         
         if ind%10==0:
             savefile("trajectories.pkl", trajectories)
             savefile(f"error_parameter.pkl", nexp)
-
+        
+    savefile("trajectories.pkl", trajectories)
+    savefile(f"error_parameter.pkl", nexp)
+    
     def make_plots(nexp, key, yl="Err", xl="Time", key2=None):
         print(f"Plotting err for {key}")
         fig, axs = panel(1, 1)
@@ -541,17 +560,17 @@ def main(N=4, dim=3, dt=1.0e-3, stride=100, useN=4, withdata=None, datapoints=10
         plt.xlabel("Time")
         plt.savefig(_filename(f"RelError_std_{key}.png"))  # , dpi=500)
 
-    make_plots(nexp, "Zerr",
-               yl=r"$\frac{||z_1-z_2||_2}{||z_1||_2+||z_2||_2}$")
-    make_plots(nexp, "Herr",
-               yl=r"$\frac{||H(z_1)-H(z_2)||_2}{||H(z_1)||_2+||H(z_2)||_2}$")
-
-    make_plots(nexp, "Perr",
-               yl=r"$\frac{||P(z_1)-P(z_2)||_2}{||P(z_1)||_2+||P(z_2)||_2}$")
+    # make_plots(nexp, "Zerr",
+    #            yl=r"$\frac{||z_1-z_2||_2}{||z_1||_2+||z_2||_2}$")
+    # make_plots(nexp, "Herr",
+    #            yl=r"$\frac{||H(z_1)-H(z_2)||_2}{||H(z_1)||_2+||H(z_2)||_2}$")
     
-    gmean_zerr = jnp.exp( jnp.log(jnp.array(nexp["Zerr"])).mean(axis=0) )
-    gmean_herr = jnp.exp( jnp.log(jnp.array(nexp["Herr"])).mean(axis=0) )
-    gmean_perr = jnp.exp( jnp.log(jnp.array(nexp["Perr"])).mean(axis=0) )
+    # make_plots(nexp, "Perr",
+    #            yl=r"$\frac{||P(z_1)-P(z_2)||_2}{||P(z_1)||_2+||P(z_2)||_2}$")
+    
+    # gmean_zerr = jnp.exp( jnp.log(jnp.array(nexp["Zerr"])).mean(axis=0) )
+    # gmean_herr = jnp.exp( jnp.log(jnp.array(nexp["Herr"])).mean(axis=0) )
+    # gmean_perr = jnp.exp( jnp.log(jnp.array(nexp["Perr"])).mean(axis=0) )
 
     # if (ifDataEfficiency == 0):
     #     np.savetxt(f"../{N}-nbody-zerr/hgnn.txt", gmean_zerr, delimiter = "\n")
