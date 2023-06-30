@@ -1,6 +1,5 @@
 # __HGNN (Hamiltonian Graph Neural Network)__
 
-<<<<<<< HEAD
 ## Installation
 install pip virtual environment using requirements.txt file
 ### pip installation
